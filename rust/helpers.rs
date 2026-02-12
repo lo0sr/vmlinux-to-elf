@@ -29,46 +29,9 @@ pub fn is_valid_symbol_name_bytes(name: &[u8]) -> bool {
         return false;
     }
 
-    name.iter().all(|&b| {
-        b.is_ascii_alphanumeric()
-            || matches!(b, b'_' | b'.' | b'$' | b'/' | b'-' | b':' | b'[' | b']')
-    })
-}
-
-/// Kallsyms symbol types follow nm-like one-byte type codes.
-pub fn is_likely_symbol_type_byte(b: u8) -> bool {
-    matches!(
-        b,
-        b'A' | b'a'
-            | b'B'
-            | b'b'
-            | b'C'
-            | b'c'
-            | b'D'
-            | b'd'
-            | b'G'
-            | b'g'
-            | b'I'
-            | b'i'
-            | b'N'
-            | b'n'
-            | b'P'
-            | b'p'
-            | b'R'
-            | b'r'
-            | b'S'
-            | b's'
-            | b'T'
-            | b't'
-            | b'U'
-            | b'u'
-            | b'V'
-            | b'v'
-            | b'W'
-            | b'w'
-            | b'-'
-            | b'?'
-    )
+    // Accept all characters - we want raw, unmodified symbols
+    // This basically just checks that the name isn't empty or too long
+    true
 }
 
 /// Return true if s starts with any of the given byte prefixes.
