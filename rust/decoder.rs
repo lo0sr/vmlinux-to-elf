@@ -4,7 +4,7 @@ use log::warn;
 use rayon::prelude::*;
 
 use super::error::{KallsymsError, Result};
-use super::helpers::{is_valid_symbol_name_bytes, starts_with_any};
+use super::helpers::{is_likely_symbol_type_byte, is_valid_symbol_name_bytes, starts_with_any};
 use super::names::collect_name_samples;
 
 /// Supported decode variants:
@@ -225,22 +225,19 @@ pub fn score_strategy_names(
         if enc.is_empty() {
             continue;
         }
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
 
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
         match variant {
             DecodeVariant::V1TokensRaw => {
-                for &b in bytes {
+                for &b in *enc {
                     let empty: &[u8] = &[];
                     let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
                     out.extend_from_slice(tok);
                 }
             }
             DecodeVariant::V2TokensViaIndex => {
-                for &b in bytes {
+                for &b in *enc {
                     let idx = token_index[b as usize] as usize;
                     let empty: &[u8] = &[];
                     let tok = tokens.get(idx).map(|v| &v[..]).unwrap_or(empty);
@@ -252,7 +249,7 @@ pub fn score_strategy_names(
                     Some(r) => r,
                     None => return 0.0,
                 };
-                for &b in bytes {
+                for &b in *enc {
                     let rb = rem[b as usize] as usize;
                     let empty: &[u8] = &[];
                     let tok = tokens.get(rb).map(|v| &v[..]).unwrap_or(empty);
@@ -264,7 +261,7 @@ pub fn score_strategy_names(
                     Some(r) => r,
                     None => return 0.0,
                 };
-                for &b in bytes {
+                for &b in *enc {
                     let rb = rem[b as usize] as usize;
                     let idx = token_index[rb] as usize;
                     let empty: &[u8] = &[];
@@ -274,7 +271,7 @@ pub fn score_strategy_names(
             }
         }
 
-        if out.len() < 3 {
+        if out.len() < 3 || !is_likely_symbol_type_byte(out[0]) {
             very_short += 1;
             continue;
         }
@@ -306,7 +303,7 @@ pub fn score_strategy_names(
 }
 
 /// Decode all names using the chosen decoding variant. Returns each entry as
-/// [type_byte | utf8_symbol_bytes].
+/// [decoded_type_byte | decoded_symbol_bytes].
 #[allow(clippy::too_many_arguments)]
 pub fn decode_all_names_with_strategy(
     data: &[u8],
@@ -341,22 +338,18 @@ pub fn decode_all_names_with_strategy(
             return Err(KallsymsError::InvalidFormat("empty encoded name".into()));
         }
 
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
-
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
         match variant {
             DecodeVariant::V1TokensRaw => {
-                for &b in bytes {
+                for &b in enc {
                     let empty: &[u8] = &[];
                     let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
                     out.extend_from_slice(tok);
                 }
             }
             DecodeVariant::V2TokensViaIndex => {
-                for &b in bytes {
+                for &b in enc {
                     let idx = token_index[b as usize] as usize;
                     let empty: &[u8] = &[];
                     let tok = tokens.get(idx).map(|v| &v[..]).unwrap_or(empty);
@@ -367,7 +360,7 @@ pub fn decode_all_names_with_strategy(
                 let rem = remap.ok_or_else(|| {
                     KallsymsError::InvalidFormat("remap missing for selected strategy".into())
                 })?;
-                for &b in bytes {
+                for &b in enc {
                     let rb = rem[b as usize] as usize;
                     let empty: &[u8] = &[];
                     let tok = tokens.get(rb).map(|v| &v[..]).unwrap_or(empty);
@@ -378,7 +371,7 @@ pub fn decode_all_names_with_strategy(
                 let rem = remap.ok_or_else(|| {
                     KallsymsError::InvalidFormat("remap missing for selected strategy".into())
                 })?;
-                for &b in bytes {
+                for &b in enc {
                     let rb = rem[b as usize] as usize;
                     let idx = token_index[rb] as usize;
                     let empty: &[u8] = &[];

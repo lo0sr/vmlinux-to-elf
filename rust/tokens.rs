@@ -4,7 +4,7 @@ use log::info;
 use rayon::prelude::*;
 
 use super::error::{KallsymsError, Result};
-use super::helpers::{is_valid_symbol_name_bytes, starts_with_any};
+use super::helpers::{is_likely_symbol_type_byte, is_valid_symbol_name_bytes, starts_with_any};
 
 /// Common kernel prefixes to score plausible decoded names.
 fn common_prefixes() -> &'static [&'static [u8]] {
@@ -255,19 +255,16 @@ pub fn score_names_with_tokens_raw_strict(
         if enc.is_empty() {
             continue;
         }
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
 
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
-        for &b in bytes {
+        for &b in enc {
             let empty: &[u8] = &[];
             let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
             out.extend_from_slice(tok);
         }
 
-        if out.len() < 3 {
+        if out.len() < 3 || !is_likely_symbol_type_byte(out[0]) {
             very_short += 1;
             continue;
         }
@@ -332,19 +329,16 @@ pub fn score_names_with_tokens_raw(
         if enc.is_empty() {
             continue;
         }
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
 
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
-        for &b in bytes {
+        for &b in enc {
             let empty: &[u8] = &[];
             let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
             out.extend_from_slice(tok);
         }
 
-        if out.len() < 3 {
+        if out.len() < 3 || !is_likely_symbol_type_byte(out[0]) {
             short_bad += 1;
             continue;
         }
