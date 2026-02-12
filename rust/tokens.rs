@@ -4,7 +4,7 @@ use log::info;
 use rayon::prelude::*;
 
 use super::error::{KallsymsError, Result};
-use super::helpers::{is_valid_symbol_name_bytes, starts_with_any};
+use super::helpers::{is_likely_symbol_type_byte, is_valid_symbol_name_bytes, starts_with_any};
 
 /// Common kernel prefixes to score plausible decoded names.
 fn common_prefixes() -> &'static [&'static [u8]] {
@@ -67,26 +67,38 @@ pub fn align_and_read_token_index(
     let result = offsets
         .par_iter()
         .filter_map(|&off| {
-            let arr = read_token_index_exact(data, off).ok()?;
-            if !arr.windows(2).all(|w| w[0] <= w[1]) || arr[255] < 64 || arr[255] > 8192 {
-                return None;
-            }
-            let name_score = extract_tokens_strict_at_base(data, table_off_hint, &arr)
-                .map(|(toks, _)| {
-                    score_names_with_tokens_raw(data, names_off, names_size, num_syms, &toks)
-                })
-                .unwrap_or(0.0);
+            let mut best: Option<([u16; 256], usize, f64)> = None;
+            for is_be in [false, true] {
+                let arr = match read_token_index_exact(data, off, is_be) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if !arr.windows(2).all(|w| w[0] <= w[1]) || arr[255] < 64 || arr[255] > 8192 {
+                    continue;
+                }
+                let name_score = extract_tokens_strict_at_base(data, table_off_hint, &arr)
+                    .map(|(toks, _)| {
+                        score_names_with_tokens_raw(data, names_off, names_size, num_syms, &toks)
+                    })
+                    .unwrap_or(0.0);
 
-            let align_bonus = if off.is_multiple_of(8) {
-                2.0
-            } else if off.is_multiple_of(4) {
-                1.0
-            } else {
-                0.0
-            };
-            let prox = 1.0 / (1.0 + ((off as isize - index_off_hint as isize).abs() as f64));
-            let score = name_score * 0.7 + align_bonus * 0.2 + prox * 0.1;
-            Some((arr, off, score))
+                let align_bonus = if off.is_multiple_of(8) {
+                    2.0
+                } else if off.is_multiple_of(4) {
+                    1.0
+                } else {
+                    0.0
+                };
+                let prox = 1.0 / (1.0 + ((off as isize - index_off_hint as isize).abs() as f64));
+                let endian_bonus = if is_be { 0.0 } else { 0.02 };
+                let score = name_score * 0.7 + align_bonus * 0.2 + prox * 0.1 + endian_bonus;
+
+                match best {
+                    Some((_, _, best_score)) if best_score >= score => {}
+                    _ => best = Some((arr, off, score)),
+                }
+            }
+            best
         })
         .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
 
@@ -105,15 +117,19 @@ pub fn align_and_read_token_index(
     }
 }
 
-/// Read exactly 256 little-endian u16 entries from the given offset.
-pub fn read_token_index_exact(data: &[u8], offset: usize) -> Result<[u16; 256]> {
+/// Read exactly 256 u16 entries from the given offset in selected endianness.
+pub fn read_token_index_exact(data: &[u8], offset: usize, is_be: bool) -> Result<[u16; 256]> {
     let mut index = [0u16; 256];
     for (i, slot) in index.iter_mut().enumerate() {
         let pos = offset + i * 2;
         if pos + 1 >= data.len() {
             return Err(KallsymsError::InvalidFormat("token index truncated".into()));
         }
-        *slot = u16::from_le_bytes([data[pos], data[pos + 1]]);
+        *slot = if is_be {
+            u16::from_be_bytes([data[pos], data[pos + 1]])
+        } else {
+            u16::from_le_bytes([data[pos], data[pos + 1]])
+        };
     }
     Ok(index)
 }
@@ -239,19 +255,16 @@ pub fn score_names_with_tokens_raw_strict(
         if enc.is_empty() {
             continue;
         }
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
 
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
-        for &b in bytes {
+        for &b in enc {
             let empty: &[u8] = &[];
             let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
             out.extend_from_slice(tok);
         }
 
-        if out.len() < 3 {
+        if out.len() < 3 || !is_likely_symbol_type_byte(out[0]) {
             very_short += 1;
             continue;
         }
@@ -316,19 +329,16 @@ pub fn score_names_with_tokens_raw(
         if enc.is_empty() {
             continue;
         }
-        let type_byte = enc[0];
-        let bytes = &enc[1..];
 
-        let mut out = Vec::with_capacity(1 + bytes.len() * 4);
-        out.push(type_byte);
+        let mut out = Vec::with_capacity(enc.len() * 4);
 
-        for &b in bytes {
+        for &b in enc {
             let empty: &[u8] = &[];
             let tok = tokens.get(b as usize).map(|v| &v[..]).unwrap_or(empty);
             out.extend_from_slice(tok);
         }
 
-        if out.len() < 3 {
+        if out.len() < 3 || !is_likely_symbol_type_byte(out[0]) {
             short_bad += 1;
             continue;
         }

@@ -56,54 +56,61 @@ pub fn find_all_token_candidates(data: &[u8]) -> Vec<TokenCandidate> {
     offsets
         .par_bridge()
         .filter_map(|pos| {
-            // Validate monotonic 256x u16 and capture last value.
-            let mut index_last = 0u16;
-            for i in 0..256 {
-                let p = pos + i * 2;
-                let (&lo, &hi) = data.get(p).zip(data.get(p + 1))?;
-                let val = u16::from_le_bytes([lo, hi]);
-                if i > 0 && val < index_last {
-                    return None;
+            for use_be in [false, true] {
+                // Validate monotonic 256x u16 and capture last value.
+                let mut index_last = 0u16;
+                for i in 0..256 {
+                    let p = pos + i * 2;
+                    let (&b0, &b1) = data.get(p).zip(data.get(p + 1))?;
+                    let val = if use_be {
+                        u16::from_be_bytes([b0, b1])
+                    } else {
+                        u16::from_le_bytes([b0, b1])
+                    };
+                    if i > 0 && val < index_last {
+                        index_last = 0;
+                        break;
+                    }
+                    index_last = val;
                 }
-                index_last = val;
-            }
-            if !(64..=8192).contains(&index_last) {
-                return None;
-            }
-            let last_token_start = index_last as usize;
-
-            // Try small set of paddings and table_end_offset.
-            for padding in [0usize, 4, 8, 16, 32, 64, 128] {
-                let table_end_with_padding = pos.saturating_sub(padding);
-                if table_end_with_padding <= last_token_start + 2 {
+                if !(64..=8192).contains(&index_last) {
                     continue;
                 }
-                for table_end_offset in 0..128usize {
-                    let table_end = table_end_with_padding.saturating_sub(table_end_offset);
-                    let table_size = last_token_start + table_end_offset + 1;
-                    if !(64..=8192).contains(&table_size) {
-                        continue;
-                    }
-                    let table_start = table_end.saturating_sub(table_size);
-                    if table_end > data.len() || table_start >= table_end {
-                        continue;
-                    }
-                    let table_slice = &data[table_start..table_end];
-                    if table_slice.len() != table_size {
-                        continue;
-                    }
-                    if last_token_start >= table_size {
-                        continue;
-                    }
-                    if !is_valid_token_table(table_slice) {
-                        continue;
-                    }
+                let last_token_start = index_last as usize;
 
-                    return Some(TokenCandidate {
-                        token_table_offset: table_start,
-                        token_table_size: table_size,
-                        token_index_offset: pos,
-                    });
+                // Try small set of paddings and table_end_offset.
+                for padding in [0usize, 4, 8, 16, 32, 64, 128] {
+                    let table_end_with_padding = pos.saturating_sub(padding);
+                    if table_end_with_padding <= last_token_start + 2 {
+                        continue;
+                    }
+                    for table_end_offset in 0..128usize {
+                        let table_end = table_end_with_padding.saturating_sub(table_end_offset);
+                        let table_size = last_token_start + table_end_offset + 1;
+                        if !(64..=8192).contains(&table_size) {
+                            continue;
+                        }
+                        let table_start = table_end.saturating_sub(table_size);
+                        if table_end > data.len() || table_start >= table_end {
+                            continue;
+                        }
+                        let table_slice = &data[table_start..table_end];
+                        if table_slice.len() != table_size {
+                            continue;
+                        }
+                        if last_token_start >= table_size {
+                            continue;
+                        }
+                        if !is_valid_token_table(table_slice) {
+                            continue;
+                        }
+
+                        return Some(TokenCandidate {
+                            token_table_offset: table_start,
+                            token_table_size: table_size,
+                            token_index_offset: pos,
+                        });
+                    }
                 }
             }
             None

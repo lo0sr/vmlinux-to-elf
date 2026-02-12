@@ -12,6 +12,7 @@ use super::decoder::{
 };
 use super::decompress::decompress_kernel_if_needed;
 use super::error::Result;
+use super::helpers::is_likely_symbol_type_byte;
 use super::tokens::{align_and_read_token_index, extract_tokens_with_name_validation};
 use super::types::{KallsymsStats, Symbol, SymbolType};
 
@@ -128,11 +129,29 @@ impl Kallsyms {
                 if i >= addresses.len() || name_with_type.is_empty() {
                     return None;
                 }
-                // Accept any symbol type byte
-                let type_byte = name_with_type[0];
+                let mut type_byte = name_with_type[0];
+                let mut name_bytes = &name_with_type[1..];
+
+                // Recover from malformed decode output by re-synchronizing on a valid type byte.
+                if !is_likely_symbol_type_byte(type_byte) {
+                    if let Some((idx, b)) = name_with_type
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .take(4)
+                        .find(|(_, b)| is_likely_symbol_type_byte(*b))
+                    {
+                        type_byte = b;
+                        name_bytes = &name_with_type[idx + 1..];
+                    }
+                }
+
+                if !is_likely_symbol_type_byte(type_byte) || name_bytes.is_empty() {
+                    return None;
+                }
+
                 let type_char = type_byte as char;
-                let name_bytes = &name_with_type[1..];
-                
+
                 // Convert to string, accepting any binary data
                 let name = match String::from_utf8(name_bytes.to_vec()) {
                     Ok(s) => s,
@@ -141,7 +160,7 @@ impl Kallsyms {
                         String::from_utf8_lossy(name_bytes).to_string()
                     }
                 };
-                
+
                 Some(Symbol {
                     address: addresses[i],
                     symbol_type: SymbolType::from_char(type_char),
